@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clipping</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" href="icon.png">
+    <link rel="apple-touch-icon" href="icon.png">
+    
+    <meta property="og:title" content="Clipping">
+    <meta property="og:image" content="https://sisema07.github.io/clipping/icon.png"> 
+    <style>
+        body {
+            background-color: #f0fff0; /* Fundo verdinho claro */
+            color: #2e8b57;
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+        }
+        img.logo {
+            width: 100px;
+            margin-bottom: 20px;
+            border-radius: 15px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+        }
+        h1 { margin-bottom: 5px; }
+        p { color: #555; margin-bottom: 30px; }
+        
+        a.btn-start {
+            background-color: #2e8b57;
+            color: white;
+            padding: 15px 40px;
+            text-decoration: none;
+            border-radius: 50px;
+            font-weight: bold;
+            font-size: 18px;
+            box-shadow: 0 4px 15px rgba(46, 139, 87, 0.4);
+        }
+        
+        #installBtn {
+            display: none;
+            margin-top: 25px;
+            background-color: white;
+            border: 2px solid #2e8b57;
+            color: #2e8b57;
+            padding: 10px 20px;
+            border-radius: 30px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <img src="icon.png" alt="Logo" class="logo">
+    <h1>Clipping Ambiental</h1>
+    <p>Monitoramento Diário</p>
+    
+    <a href="https://clipping-qqskrs7o6fjmthnzabyvke.streamlit.app/" class="btn-start">ABRIR SISTEMA</a>
+
+    <button id="installBtn">📲 Instalar App</button>
+
+    <script>
+        let deferredPrompt;
+        const installBtn = document.getElementById('installBtn');
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            installBtn.style.display = 'block';
+        });
+        installBtn.addEventListener('click', async () => {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                deferredPrompt = null;
+                installBtn.style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>
