@@ -1,33 +1,19 @@
 import streamlit as st
 import feedparser
-import requests
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import re
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Gerador de Clipping", page_icon="📰", layout="wide")
+st.set_page_config(page_title="Clipping Diário", page_icon="✂️", layout="wide")
 
-st.title("📰 Gerador de Clipping - SISEMA & Geral")
-st.markdown("Monitoramento inteligente com filtro de relevância (apenas para notícias gerais) e limpeza de fontes.")
+st.title("✂️ Clipping Diário - Lista Limpa")
+st.markdown("Busca precisa por janela de horário (08:30 às 08:30).")
 
 # --- FUNÇÕES DE SUPORTE ---
 
-def encurtar_link(url_longa):
-    """Encurta links para o WhatsApp"""
-    try:
-        api_url = f"https://is.gd/create.php?format=simple&url={url_longa}"
-        response = requests.get(api_url, timeout=5)
-        if response.status_code == 200 and "is.gd" in response.text:
-            return response.text.strip()
-    except:
-        pass
-    return url_longa
-
 def limpar_nome_veiculo(nome_cru, titulo_materia):
-    """
-    Transforma 'ofator.com.br' em 'O Fator' e remove sujeira.
-    """
+    """Padroniza nomes de veículos"""
     if " - " in titulo_materia:
         possivel_nome = titulo_materia.rsplit(" - ", 1)[1].strip()
         if len(possivel_nome) < 30:
@@ -47,53 +33,67 @@ def limpar_nome_veiculo(nome_cru, titulo_materia):
     
     return nome.title()
 
-def categorizar_veiculo(nome_veiculo):
-    nome = nome_veiculo.lower()
-    if "youtube" in nome or "tv" in nome or "canal" in nome: return "YOUTUBE"
-    if any(x in nome for x in ["jornal", "estado", "folha", "tempo", "tribuna", "diário", "gazeta", "hoje em dia"]): return "JORNAIS"
-    if "revista" in nome: return "REVISTAS"
-    return "PORTAIS"
-
 def eh_relevante(titulo):
-    """
-    Filtro 'Anti-Ruído' para notícias GERAIS.
-    Bloqueia concursos e editais genéricos.
-    """
+    """Filtro para notícias gerais (remove editais/concursos)"""
     titulo_lower = titulo.lower()
     palavras_bloqueadas = [
         "concurso", "edital", "vaga", "inscrição", "processo seletivo", 
         "estágio", "gabarito", "prova", "classificação", "convocação",
-        "resultado final", "homologação", "vestibular", "enem", "curso gratuito",
-        "workshop", "palestra"
+        "resultado final", "homologação", "vestibular", "enem"
     ]
-    
     for palavra in palavras_bloqueadas:
         if palavra in titulo_lower:
             return False
     return True
 
-def buscar_noticias_google(termos, data_especifica=None, aplicar_filtro=True):
+def buscar_e_filtrar(termos, data_referencia, aplicar_filtro_palavras=True):
     """
-    O parâmetro 'aplicar_filtro' define se vamos ignorar editais/concursos ou não.
+    Busca no Google e filtra manualmente pelo horário (08:30 D-1 até 08:30 D).
     """
-    noticias = []
+    # 1. Definição da Janela de Tempo (Fuso Horário BRT é UTC-3)
+    # 08:30 BRT = 11:30 UTC
+    # Se a data referência é 21/01
+    # Inicio: 20/01 às 11:30 UTC
+    # Fim: 21/01 às 11:30 UTC
+    
+    # Criamos datas 'aware' (com fuso horário UTC) para comparar com o feed do Google
+    offset_utc = timedelta(hours=3) # Diferença Brasil -> UTC
+    
+    # Data final (Dia escolhido às 08:30 BRT -> 11:30 UTC)
+    dt_fim = datetime.combine(data_referencia, datetime.min.time()) + timedelta(hours=8, minutes=30) + offset_utc
+    dt_fim = dt_fim.replace(tzinfo=timezone.utc)
+    
+    # Data inicial (Dia anterior às 08:30 BRT -> 11:30 UTC)
+    dt_inicio = dt_fim - timedelta(days=1)
+    
+    noticias_agrupadas = {} # Dicionário: {'Nome Veículo': [{'titulo': x, 'link': y}]}
     urls_vistas = set()
     
     for termo in termos:
         termo_url = termo.replace(" ", "+")
         
-        if data_especifica:
-            data_formatada = data_especifica.strftime("%Y-%m-%d")
-            data_seguinte = (data_especifica + timedelta(days=1)).strftime("%Y-%m-%d")
-            query_time = f"after:{data_formatada}+before:{data_seguinte}"
-        else:
-            query_time = "when:1d"
-            
-        rss_url = f"https://news.google.com/rss/search?q={termo_url}+{query_time}&hl=pt-BR&gl=BR&ceid=BR:pt-419"
+        # Pedimos ao Google um intervalo um pouco maior para garantir que nada fique de fora
+        # after:DiaAnterior before:DiaSeguinte
+        q_after = (data_referencia - timedelta(days=2)).strftime("%Y-%m-%d")
+        q_before = (data_referencia + timedelta(days=1)).strftime("%Y-%m-%d")
+        
+        rss_url = f"https://news.google.com/rss/search?q={termo_url}+after:{q_after}+before:{q_before}&hl=pt-BR&gl=BR&ceid=BR:pt-419"
         
         feed = feedparser.parse(rss_url)
         
         for entry in feed.entries:
+            # Parse da data de publicação do RSS (struct_time -> datetime UTC)
+            if hasattr(entry, 'published_parsed'):
+                try:
+                    pub_dt = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+                    
+                    # O GRANDE FILTRO DE HORÁRIO
+                    if not (dt_inicio <= pub_dt <= dt_fim):
+                        continue # Pula se estiver fora do horário das 08:30 as 08:30
+                        
+                except:
+                    continue # Se não tiver data, ignora
+            
             titulo_completo = entry.title
             link = entry.link
             
@@ -102,10 +102,7 @@ def buscar_noticias_google(termos, data_especifica=None, aplicar_filtro=True):
             else:
                 titulo_limpo = titulo_completo
 
-            # --- AQUI ESTÁ A CORREÇÃO ---
-            # Só aplicamos o filtro se for solicitado (Geral).
-            # Se for SISEMA (aplicar_filtro=False), passa tudo.
-            if aplicar_filtro and not eh_relevante(titulo_limpo):
+            if aplicar_filtro_palavras and not eh_relevante(titulo_limpo):
                 continue
 
             chave = titulo_limpo.lower()
@@ -115,42 +112,34 @@ def buscar_noticias_google(termos, data_especifica=None, aplicar_filtro=True):
                 veiculo_sujo = entry.source.title if 'source' in entry else "Fonte Desconhecida"
                 veiculo_limpo = limpar_nome_veiculo(veiculo_sujo, titulo_completo)
                 
-                categoria = categorizar_veiculo(veiculo_limpo)
+                # Agrupamento por veículo
+                if veiculo_limpo not in noticias_agrupadas:
+                    noticias_agrupadas[veiculo_limpo] = []
                 
-                noticias.append({
+                noticias_agrupadas[veiculo_limpo].append({
                     "titulo": titulo_limpo,
-                    "link_original": link,
-                    "link_curto": link, 
-                    "veiculo": veiculo_limpo,
-                    "categoria": categoria
+                    "link": link
                 })
                 
-    return noticias
+    return noticias_agrupadas
 
 # --- INTERFACE ---
 
-modo_busca = st.radio("Período da Busca:", ["Últimas 24 horas", "Data Específica"], horizontal=True)
+data_escolhida = st.date_input("Data do Clipping (Considera das 08:30 de ontem até as 08:30 desta data):", format="DD/MM/YYYY")
 
-data_escolhida = None
-if modo_busca == "Data Específica":
-    data_escolhida = st.date_input("Selecione a data:", format="DD/MM/YYYY")
-
-if st.button("🚀 Iniciar Busca", type="primary"):
-    with st.spinner("Minerando notícias..."):
+if st.button("🚀 Gerar Lista Limpa", type="primary"):
+    with st.spinner("Buscando notícias e filtrando horário exato..."):
         
-        # 1. BUSCA SISEMA (SEM FILTRO)
-        # Traz tudo: editais, concursos, notícias, polêmicas.
+        # 1. SISEMA
         termos_sisema = [
             '"Semad" Minas Gerais', '"IEF" Minas Gerais', 
             '"Feam" Minas Gerais', '"Igam" Minas Gerais',
             '"Secretaria de Meio Ambiente" Minas Gerais',
             '"Sistema Estadual de Meio Ambiente"'
         ]
-        # aplicar_filtro=False -> GARANTE QUE NÃO BLOQUEIA NADA DO SISEMA
-        raw_sisema = buscar_noticias_google(termos_sisema, data_escolhida, aplicar_filtro=False)
+        dados_sisema = buscar_e_filtrar(termos_sisema, data_escolhida, aplicar_filtro_palavras=False)
         
-        # 2. BUSCA GERAL (COM FILTRO)
-        # Bloqueia lixo: concursos de prefeitura, editais de escola, etc.
+        # 2. GERAL
         termos_geral = [
             '"Crime Ambiental" Minas Gerais',
             '"Desmatamento" Minas Gerais',
@@ -162,92 +151,34 @@ if st.button("🚀 Iniciar Busca", type="primary"):
             '"Mudanças Climáticas" governo Minas',
             '"Crise hídrica" Minas Gerais'
         ]
-        # aplicar_filtro=True -> GARANTE LIMPEZA NO GERAL
-        raw_geral = buscar_noticias_google(termos_geral, data_escolhida, aplicar_filtro=True)
+        dados_geral = buscar_e_filtrar(termos_geral, data_escolhida, aplicar_filtro_palavras=True)
         
-        total_links = len(raw_sisema) + len(raw_geral)
-        progresso = st.progress(0)
-        status = st.empty()
+        # --- GERAÇÃO DO TEXTO ---
+        # Data formatada para exibição
+        dt_ontem = data_escolhida - timedelta(days=1)
+        info_periodo = f"(De {dt_ontem.strftime('%d/%m')} às 08:30 até {data_escolhida.strftime('%d/%m')} às 08:30)"
         
-        estado = {'contador': 0}
+        texto_final = ""
         
-        def processar_listas(lista_crua):
-            organizado = {"JORNAIS": [], "PORTAIS": [], "REVISTAS": [], "YOUTUBE": []}
-            for item in lista_crua:
-                estado['contador'] += 1
-                status.text(f"Processando {estado['contador']}/{total_links}: {item['veiculo']}")
-                progresso.progress(estado['contador'] / (total_links + 1) if total_links > 0 else 0)
-                
-                item['link_curto'] = encurtar_link(item['link_original'])
-                
-                if item['categoria'] in organizado:
-                    organizado[item['categoria']].append(item)
-                else:
-                    organizado["PORTAIS"].append(item)
-            return organizado
-
-        dados_sisema = processar_listas(raw_sisema)
-        dados_geral = processar_listas(raw_geral)
-        
-        progresso.empty()
-        status.empty()
-        
-        if data_escolhida:
-            data_texto = data_escolhida.strftime("%d.%m.%Y")
-        else:
-            data_texto = datetime.now().strftime("%d.%m.%Y")
-
-        # --- GERAÇÃO WHATSAPP ---
-        texto_zap = f"*Clipping Meio Ambiente: {data_texto}*\n\n"
-        
-        def montar_secao_zap(titulo_secao, dados):
+        def formatar_bloco(titulo_bloco, dados):
             txt = ""
-            if any(dados.values()):
-                txt += f"*{titulo_secao}*\n\n"
-                for cat in ["JORNAIS", "PORTAIS", "REVISTAS", "YOUTUBE"]:
-                    if dados[cat]:
-                        txt += f"*{cat}*\n\n"
-                        for n in dados[cat]:
-                            txt += f"*{n['veiculo']}*\n" 
-                            txt += f"{n['titulo']}\n"
-                            txt += f"{n['link_curto']}\n\n"
+            if dados:
+                txt += f"{titulo_bloco}\n\n"
+                # Ordena os veículos alfabeticamente
+                for veiculo in sorted(dados.keys()):
+                    txt += f"{veiculo}\n"
+                    # Lista as matérias desse veículo
+                    for noticia in dados[veiculo]:
+                        txt += f"{noticia['titulo']}\n"
+                        txt += f"{noticia['link']}\n"
+                    txt += "\n" # Espaço entre veículos
             return txt
 
-        texto_zap += montar_secao_zap("MATÉRIAS QUE CITAM O SISEMA", dados_sisema)
-        texto_zap += montar_secao_zap("OUTRAS MATÉRIAS RELEVANTES", dados_geral)
-        texto_zap += "_Clipping direcionado exclusivamente para servidores, sendo proibida a divulgação para outras pessoas_"
-
-        # --- GERAÇÃO HTML ---
-        texto_html = f"<p><strong><u>Clipping Meio Ambiente: {data_texto}</u></strong></p>\n<p> </p>\n"
+        texto_final += f"CLIPPING AMBIENTAL - {data_escolhida.strftime('%d/%m/%Y')}\n{info_periodo}\n\n"
         
-        def montar_secao_html(titulo_secao, dados):
-            html = ""
-            if any(dados.values()):
-                html += f"<p><span style=\"text-decoration: underline;\"><strong>{titulo_secao}</strong></span></p>\n<p> </p>\n"
-                for cat in ["JORNAIS", "PORTAIS", "REVISTAS", "YOUTUBE"]:
-                    if dados[cat]:
-                        html += f"<p><span style=\"text-decoration: underline;\"><strong>{cat}</strong></span></p>\n<p> </p>\n"
-                        for i, n in enumerate(dados[cat]):
-                            html += f"<p><strong>{n['veiculo']}</strong></p>\n"
-                            html += f"<p><a href=\"{n['link_original']}\">{n['titulo']}</a></p>\n"
-                            if i < len(dados[cat]) - 1:
-                                html += "<p> </p>\n"
-                        html += "<p> </p>\n"
-            return html
-
-        texto_html += montar_secao_html("MATÉRIAS QUE CITAM O SISEMA", dados_sisema)
-        texto_html += montar_secao_html("OUTRAS MATÉRIAS RELEVANTES", dados_geral)
-        texto_html += "<p><em><strong>Clipping direcionado exclusivamente para servidores, sendo proibida a divulgação para outras pessoas</strong></em></p>"
-
-        # --- EXIBIÇÃO ---
-        st.success(f"Busca finalizada! {len(raw_sisema)} matérias Sisema e {len(raw_geral)} gerais.")
+        texto_final += formatar_bloco("MATÉRIAS QUE CITAM O SISEMA", dados_sisema)
+        texto_final += "----------------------------------------\n\n"
+        texto_final += formatar_bloco("OUTRAS MATÉRIAS RELEVANTES", dados_geral)
         
-        tab1, tab2 = st.tabs(["📱 WhatsApp (Links Curtos)", "💻 HTML (Links Originais)"])
-        
-        with tab1:
-            st.code(texto_zap, language="markdown")
-            st.caption("Ideal para copiar e colar no grupo.")
-            
-        with tab2:
-            st.code(texto_html, language="html")
-            st.caption("Ideal para colar na ferramenta de e-mail ou site.")
+        st.success("Lista gerada!")
+        st.text_area("Copie o conteúdo abaixo:", value=texto_final, height=600)
