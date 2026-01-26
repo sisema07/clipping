@@ -7,313 +7,275 @@ import re
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Clipping Diário", page_icon="✂️", layout="wide")
 
-st.title("✂️ Clipping Diário")
+st.title("✂️ Clipping Diário - Auditoria Rigorosa")
 st.markdown("Monitoramento 08:30 às 08:30")
 
-# --- LISTAS DE CONTROLE ---
+# --- LISTAS DE AUDITORIA (PENTE FINO) ---
 
-# Fontes Obrigatórias (O robô vai varrer estes domínios especificamente)
-FONTES_OBRIGATORIAS = [
-    "em.com.br",                # Estado de Minas
-    "otempo.com.br",            # O Tempo
-    "hojeemdia.com.br",         # Hoje em Dia
-    "g1.globo.com/mg",          # G1 Minas (Ajustado para focar em MG)
-    "g1.globo.com/meio-ambiente", # G1 Meio Ambiente
-    "oeco.org.br",              # O Eco
-    "agenciabrasil.ebc.com.br/meio-ambiente", # Agência Brasil
-    "conexaoplaneta.com.br"     # Conexão Planeta
+# 1. SISEMA: A matéria SÓ entra se tiver um desses termos no Título ou no Resumo
+TERMOS_VALIDACAO_SISEMA = [
+    "SISEMA", "SEMAD", "IEF", "FEAM", "IGAM",
+    "SISTEMA ESTADUAL DE MEIO AMBIENTE",
+    "SECRETARIA DE ESTADO DE MEIO AMBIENTE",
+    "INSTITUTO ESTADUAL DE FLORESTAS",
+    "FUNDAÇÃO ESTADUAL DO MEIO AMBIENTE",
+    "INSTITUTO MINEIRO DE GESTÃO DAS ÁGUAS"
 ]
 
-# Termos de Bloqueio (Ruídos)
-TERMOS_BLOQUEIO_GERAL = [
-    "PREVISÃO DO TEMPO", "VAI CHOVER", "CHUVA EM", "TEMPO EM", "CLIMA EM", "SOL COM NUVENS", "METEOROLOGIA",
+# 2. GERAL: A matéria SÓ entra se tiver contexto ambiental (evita curiosidades aleatórias)
+CONTEXTO_AMBIENTAL = [
+    "MEIO AMBIENTE", "AMBIENTAL", "NATUREZA", "ECOLÓGIC", "SUSTENTÁ",
+    "FAUNA", "FLORA", "ANIMAL", "BICHO", "ONÇA", "LOBO", "PEIXE", "RESGATE",
+    "RIO", "ÁGUA", "BARRAGEM", "NASCENTE", "CHUVA", "SECA", "HIDRIC",
+    "MATA", "FLORESTA", "PARQUE", "UNIDADE DE CONSERVAÇÃO", "APP",
+    "POLUIÇÃO", "LIXO", "RESÍDUO", "MINERAÇÃO", "DESMATAMENTO", "QUEIMADA", "INCÊNDIO",
+    "CRIME", "MULTA", "INFRAÇÃO", "CLIMA", "AQUECIMENTO"
+]
+
+# 3. BLOQUEIO (Remove lixo óbvio)
+TERMOS_BLOQUEIO = [
+    "PREVISÃO DO TEMPO", "VAI CHOVER", "TEMPO EM", "CLIMA EM", "SOL COM NUVENS",
     "CONCURSO", "EDITAL", "VAGA", "INSCRIÇÃO", "PROCESSO SELETIVO", "GABARITO",
     "PALESTRA", "WORKSHOP", "SEMINÁRIO", "AULA", "ALUNOS", "ESCOLA", "REUNIÃO",
     "COMUNICADO", "CURSO", "FORMATURA", "VESTIBULAR", "ENEM", "ESTÁGIO"
 ]
 
+# --- SITES OBRIGATÓRIOS ---
+FONTES_OBRIGATORIAS = [
+    "em.com.br", "otempo.com.br", "hojeemdia.com.br", 
+    "g1.globo.com/mg", "g1.globo.com/meio-ambiente", 
+    "oeco.org.br", "agenciabrasil.ebc.com.br/meio-ambiente", "conexaoplaneta.com.br"
+]
+
 # --- FUNÇÕES DE SUPORTE ---
 
 def resolver_link_final(url_google):
-    """Descobre o link original"""
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-        response = requests.head(url_google, allow_redirects=True, timeout=5, headers=headers)
-        if response.status_code == 200:
-            return response.url
-        else:
-            response = requests.get(url_google, allow_redirects=True, timeout=5, headers=headers)
-            return response.url
+        headers = {"User-Agent": "Mozilla/5.0"}
+        # Tenta HEAD primeiro (mais rápido)
+        r = requests.head(url_google, allow_redirects=True, timeout=5, headers=headers)
+        if r.status_code == 200: return r.url
+        # Se falhar, GET
+        r = requests.get(url_google, allow_redirects=True, timeout=5, headers=headers)
+        return r.url
     except:
         return url_google
 
 def limpar_nome_veiculo(nome_cru, titulo_materia):
-    """Padroniza o nome do veículo"""
     if " - " in titulo_materia:
         possivel_nome = titulo_materia.rsplit(" - ", 1)[1].strip()
-        if len(possivel_nome) < 40:
-            nome_cru = possivel_nome
+        if len(possivel_nome) < 40: nome_cru = possivel_nome
 
     nome = nome_cru.replace("www.", "").replace(".com.br", "").replace(".com", "").replace(".org", "").replace(".gov", "")
     nome = nome.replace("-", " ").replace("_", " ")
     
-    mapa_correcao = {
-        "gazetadevarginha": "Gazeta de Varginha",
-        "diariodoaco": "Diário do Aço",
-        "em": "Estado de Minas",
-        "otempo": "O Tempo",
-        "hojeemdia": "Hoje em Dia",
-        "tribunademinas": "Tribuna de Minas",
-        "folha": "Folha de S.Paulo",
-        "agenciaminas": "Agência Minas",
-        "almg": "Assembleia Legislativa (ALMG)",
-        "g1": "Portal G1",
-        "uol": "Portal UOL",
-        "r7": "Portal R7",
-        "youtube": "YouTube",
-        "oeco": "O Eco",
-        "conexaoplaneta": "Conexão Planeta",
-        "agenciabrasil": "Agência Brasil"
+    mapa = {
+        "gazetadevarginha": "Gazeta de Varginha", "diariodoaco": "Diário do Aço",
+        "em": "Estado de Minas", "otempo": "O Tempo", "hojeemdia": "Hoje em Dia",
+        "tribunademinas": "Tribuna de Minas", "folha": "Folha de S.Paulo",
+        "agenciaminas": "Agência Minas", "almg": "Assembleia Legislativa",
+        "g1": "Portal G1", "uol": "Portal UOL", "r7": "Portal R7", "youtube": "YouTube",
+        "oeco": "O Eco", "conexaoplaneta": "Conexão Planeta", "agenciabrasil": "Agência Brasil"
     }
     
     nome_lower = nome.lower()
-    for chave, valor in mapa_correcao.items():
-        if chave in nome_lower:
-            return valor
-            
+    for k, v in mapa.items():
+        if k in nome_lower: return v
     return nome.title()
-
-def verificar_relevancia_geral(titulo):
-    """Filtra ruídos"""
-    titulo_upper = titulo.upper()
-    for bloqueio in TERMOS_BLOQUEIO_GERAL:
-        if bloqueio in titulo_upper:
-            return False
-    return True
 
 def converter_para_brt(struct_time_utc):
     dt_utc = datetime(*struct_time_utc[:6], tzinfo=timezone.utc)
-    dt_brt = dt_utc - timedelta(hours=3)
-    return dt_brt.replace(tzinfo=None)
+    return (dt_utc - timedelta(hours=3)).replace(tzinfo=None)
 
-# --- FUNÇÃO MESTRA DE BUSCA ---
-def executar_busca_inteligente(termos_lista, fontes_especificas, data_referencia, tipo_filtro, container_status, barra_progresso, progresso_atual, total_etapas):
+# --- FUNÇÕES DE AUDITORIA (PENTE FINO) ---
+
+def auditoria_sisema(texto_completo):
+    """Retorna True apenas se encontrar SIGLAS EXATAS no texto (Título + Resumo)"""
+    texto_upper = texto_completo.upper()
+    for termo in TERMOS_VALIDACAO_SISEMA:
+        # Usa regex word boundary (\b) para evitar falsos positivos (ex: achar IEF dentro de RIEFA)
+        # Mas para siglas simples, busca direta é mais segura contra pontuação
+        if termo in texto_upper:
+            return True
+    return False
+
+def auditoria_geral(texto_completo):
+    """
+    1. Bloqueia termos proibidos (concurso, previsão do tempo).
+    2. Obriga ter contexto ambiental (rio, mata, bicho).
+    """
+    texto_upper = texto_completo.upper()
+    
+    # 1. Bloqueio
+    for ruim in TERMOS_BLOQUEIO:
+        if ruim in texto_upper: return False
+        
+    # 2. Contexto Obrigatório
+    tem_contexto = False
+    for bom in CONTEXTO_AMBIENTAL:
+        if bom in texto_upper:
+            tem_contexto = True
+            break
+            
+    return tem_contexto
+
+# --- MOTOR DE BUSCA ---
+
+def executar_busca_auditada(termos_lista, fontes_especificas, data_referencia, tipo_filtro, container_status, barra, prog_atual, total_etapas):
     
     fim_janela = datetime.combine(data_referencia, dt_time(8, 30))
     inicio_janela = fim_janela - timedelta(days=1)
     
-    noticias_temp = [] # Lista temporária para processamento
+    # URLs para varrer
+    lista_urls = []
     
-    # 1. BUSCA GERAL (Varredura na Web)
+    # 1. Google Geral
     for termo in termos_lista:
-        progresso_atual += 1
+        prog_atual += 1
         container_status.text(f"Varrendo Web: {termo}...")
-        barra_progresso.progress(progresso_atual / total_etapas)
+        barra.progress(prog_atual / total_etapas)
         
         termo_url = termo.replace(" ", "+")
         q_after = (data_referencia - timedelta(days=2)).strftime("%Y-%m-%d")
         q_before = (data_referencia + timedelta(days=1)).strftime("%Y-%m-%d")
-        
-        rss_url = f"https://news.google.com/rss/search?q={termo_url}+after:{q_after}+before:{q_before}&hl=pt-BR&gl=BR&ceid=BR:pt-419"
-        noticias_temp.append(rss_url)
+        lista_urls.append(f"https://news.google.com/rss/search?q={termo_url}+after:{q_after}+before:{q_before}&hl=pt-BR&gl=BR&ceid=BR:pt-419")
 
-    # 2. BUSCA DIRECIONADA (Sites Obrigatórios)
-    # Cria uma "Super Query" (Termo1 OR Termo2) site:site.com
-    # Isso economiza tempo e foca no site específico
-    
-    # Prepara os termos para a query combinada (remove aspas para simplificar a concatenação OR)
+    # 2. Sites Específicos (Busca Combinada)
     termos_limpos = []
     for t in termos_lista:
-        # Extrai a palavra chave principal para o OR (ex: "Semad" "Minas" -> Semad)
-        # Pega a primeira palavra entre aspas ou a primeira palavra
         match = re.search(r'"([^"]+)"', t)
-        if match:
-            termos_limpos.append(match.group(1))
-        else:
-            termos_limpos.append(t.split()[0])
-            
-    # Cria string (Termo1 OR Termo2 OR Termo3)
+        termos_limpos.append(match.group(1) if match else t.split()[0])
+    
     query_or = "(" + " OR ".join([f'"{x}"' for x in termos_limpos]) + ")"
     
     for site in fontes_especificas:
-        progresso_atual += 1
-        container_status.text(f"Varrendo Site Específico: {site}...")
-        barra_progresso.progress(progresso_atual / total_etapas)
+        prog_atual += 1
+        container_status.text(f"Varrendo Site: {site}...")
+        barra.progress(prog_atual / total_etapas)
         
-        # Query: (Semad OR IEF ...) site:em.com.br
         query_site = f"{query_or} site:{site}"
-        query_url = query_site.replace(" ", "+")
-        
+        q_url = query_site.replace(" ", "+")
         q_after = (data_referencia - timedelta(days=2)).strftime("%Y-%m-%d")
         q_before = (data_referencia + timedelta(days=1)).strftime("%Y-%m-%d")
-        
-        rss_url = f"https://news.google.com/rss/search?q={query_url}+after:{q_after}+before:{q_before}&hl=pt-BR&gl=BR&ceid=BR:pt-419"
-        noticias_temp.append(rss_url)
+        lista_urls.append(f"https://news.google.com/rss/search?q={q_url}+after:{q_after}+before:{q_before}&hl=pt-BR&gl=BR&ceid=BR:pt-419")
 
-    # --- PROCESSAMENTO DOS FEEDS ---
-    resultados_agrupados = {}
-    urls_processadas = set() # Para evitar duplicatas entre Busca Geral e Busca Específica
+    # --- PROCESSAMENTO ---
+    resultados = {}
+    duplicatas = set()
 
-    for url_feed in noticias_temp:
-        feed = feedparser.parse(url_feed)
-        
+    for url in lista_urls:
+        feed = feedparser.parse(url)
         for entry in feed.entries:
+            
             # Filtro Horário
             if hasattr(entry, 'published_parsed'):
                 try:
-                    pub_dt_brt = converter_para_brt(entry.published_parsed)
-                    if not (inicio_janela <= pub_dt_brt <= fim_janela):
-                        continue
-                except:
-                    continue
+                    pub_dt = converter_para_brt(entry.published_parsed)
+                    if not (inicio_janela <= pub_dt <= fim_janela): continue
+                except: continue
 
-            titulo_completo = entry.title
-            link_google = entry.link
+            # Preparação dos dados
+            titulo = entry.title
+            resumo = entry.summary if 'summary' in entry else ""
+            texto_para_auditoria = f"{titulo} {resumo}"
             
-            if " - " in titulo_completo:
-                titulo_limpo = titulo_completo.rsplit(" - ", 1)[0]
-            else:
-                titulo_limpo = titulo_completo
+            # Limpeza Título
+            if " - " in titulo: titulo = titulo.rsplit(" - ", 1)[0]
+            
+            # --- A AUDITORIA ACONTECE AQUI ---
+            passou_na_auditoria = False
+            
+            if tipo_filtro == "SISEMA":
+                # Verifica se as siglas estão no Título OU no Resumo
+                if auditoria_sisema(texto_para_auditoria):
+                    passou_na_auditoria = True
+            
+            elif tipo_filtro == "GERAL":
+                # Verifica bloqueios E contexto ambiental
+                if auditoria_geral(texto_para_auditoria):
+                    passou_na_auditoria = True
+            
+            if passou_na_auditoria:
+                chave = titulo.lower()
+                if chave not in duplicatas:
+                    duplicatas.add(chave)
+                    
+                    v_raw = entry.source.title if 'source' in entry else "Fonte Desconhecida"
+                    veiculo = limpar_nome_veiculo(v_raw, entry.title)
+                    link = resolver_link_final(entry.link)
+                    
+                    if veiculo not in resultados: resultados[veiculo] = []
+                    resultados[veiculo].append({'titulo': titulo, 'link': link})
 
-            # Filtro de Relevância
-            if tipo_filtro == "GERAL":
-                if not verificar_relevancia_geral(titulo_limpo):
-                    continue
-            
-            # Deduplicação (chave = título minúsculo)
-            chave = titulo_limpo.lower()
-            if chave not in urls_processadas:
-                urls_processadas.add(chave)
-                
-                veiculo_sujo = entry.source.title if 'source' in entry else "Fonte Desconhecida"
-                veiculo_limpo = limpar_nome_veiculo(veiculo_sujo, titulo_completo)
-                
-                # Resolve Link
-                link_real = resolver_link_final(link_google)
-                
-                if veiculo_limpo not in resultados_agrupados:
-                    resultados_agrupados[veiculo_limpo] = []
-                
-                resultados_agrupados[veiculo_limpo].append({
-                    "titulo": titulo_limpo,
-                    "link": link_real
-                })
-                
-    return resultados_agrupados, progresso_atual
+    return resultados, prog_atual
 
 # --- INTERFACE ---
 
-st.info("O sistema buscará notícias entre 08:30 de ontem e 08:30 de hoje (data selecionada).")
-data_escolhida = st.date_input("Selecione a Data de Referência:", format="DD/MM/YYYY")
+st.info("Busca entre 08:30 de ontem e 08:30 da data selecionada.")
+data = st.date_input("Data de Referência:", format="DD/MM/YYYY")
 
-if st.button("🚀 Gerar Clipping (Web + Sites Prioritários)", type="primary"):
+if st.button("🚀 Gerar Clipping Auditado", type="primary"):
+    status = st.empty()
+    bar = st.progress(0)
     
-    container_status = st.empty()
-    barra = st.progress(0)
-    
-    # Definição dos Termos
-    exclusoes = "-Bahia -BA -Mato -MT -Acre -AC -Tocantins -TO -Amazonas -AM -Pará -PA"
-    
-    termos_sisema = [
-        f'"Semad" "Minas Gerais" {exclusoes}', 
-        f'"Sisema" "Minas Gerais" {exclusoes}',
-        f'"Sistema Estadual de Meio Ambiente" "Minas Gerais" {exclusoes}',
-        f'"Secretaria de Estado de Meio Ambiente" "Minas Gerais" {exclusoes}',
-        f'"IEF" "Minas Gerais" {exclusoes}', 
-        f'"Instituto Estadual de Florestas" "Minas Gerais" {exclusoes}',
-        f'"Feam" "Minas Gerais" {exclusoes}', 
-        f'"Fundação Estadual do Meio Ambiente" "Minas Gerais" {exclusoes}',
-        f'"Igam" "Minas Gerais" {exclusoes}',
-        f'"Instituto Mineiro de Gestão das Águas" "Minas Gerais" {exclusoes}'
+    # Termos
+    excl = "-Bahia -BA -Mato -MT -Acre -AC -Tocantins -TO -Amazonas -AM -Pará -PA"
+    t_sisema = [
+        f'"Semad" "Minas Gerais" {excl}', f'"IEF" "Minas Gerais" {excl}', 
+        f'"Feam" "Minas Gerais" {excl}', f'"Igam" "Minas Gerais" {excl}',
+        f'"Sisema" "Minas Gerais" {excl}', f'"Sistema Estadual de Meio Ambiente" {excl}',
+        f'"Secretaria de Estado de Meio Ambiente" {excl}'
     ]
     
-    termos_geral = [
-        '"Acidente ambiental" Minas Gerais',
-        '"Rompimento" barragem Minas Gerais',
-        '"Vazamento" rejeito Minas Gerais',
-        '"Onça" Minas Gerais',  
-        '"Lobo guará" Minas Gerais',
-        '"Resgate" animal Minas Gerais',
-        '"Multa ambiental" Minas Gerais',
-        '"Crime ambiental" Minas Gerais',
-        '"Desmatamento ilegal" Minas Gerais',
-        '"Poluição rio" Minas Gerais',
-        '"Mortandade peixes" Minas Gerais',
-        '"Espécie rara" Minas Gerais',
-        '"Nova espécie" Minas Gerais',
-        '"Incêndio" parque estadual Minas',
-        '"Operação" meio ambiente Minas Gerais'
+    t_geral = [
+        '"Acidente ambiental" Minas', '"Rompimento" Minas', '"Onça" Minas', 
+        '"Lobo guará" Minas', '"Resgate animal" Minas', '"Multa ambiental" Minas',
+        '"Crime ambiental" Minas', '"Desmatamento" Minas', '"Poluição" Minas',
+        '"Espécie rara" Minas', '"Incêndio" parque Minas', '"Operação" ambiental Minas',
+        '"Morte peixes" Minas', '"Capivara" Minas', '"Tamanduá" Minas'
     ]
     
-    # Cálculo para barra de progresso
-    # Etapas = (Termos Sisema + Sites Sisema) + (Termos Geral + Sites Geral)
-    total_etapas = len(termos_sisema) + len(FONTES_OBRIGATORIAS) + len(termos_geral) + len(FONTES_OBRIGATORIAS)
-    prog_atual = 0
+    total = len(t_sisema) + len(FONTES_OBRIGATORIAS) + len(t_geral) + len(FONTES_OBRIGATORIAS)
+    prog = 0
     
-    # 1. EXECUÇÃO SISEMA
-    dados_sisema, prog_atual = executar_busca_inteligente(
-        termos_sisema, FONTES_OBRIGATORIAS, data_escolhida, "SISEMA", 
-        container_status, barra, prog_atual, total_etapas
-    )
+    d_sisema, prog = executar_busca_auditada(t_sisema, FONTES_OBRIGATORIAS, data, "SISEMA", status, bar, prog, total)
+    d_geral, prog = executar_busca_auditada(t_geral, FONTES_OBRIGATORIAS, data, "GERAL", status, bar, prog, total)
     
-    # 2. EXECUÇÃO GERAL
-    dados_geral, prog_atual = executar_busca_inteligente(
-        termos_geral, FONTES_OBRIGATORIAS, data_escolhida, "GERAL", 
-        container_status, barra, prog_atual, total_etapas
-    )
+    bar.empty()
+    status.empty()
     
-    barra.empty()
-    container_status.empty()
+    # Texto
+    ontem = data - timedelta(days=1)
+    txt = f"CLIPPING DIÁRIO - {data.strftime('%d/%m/%Y')}\n"
+    txt += f"Janela: {ontem.strftime('%d/%m')} (08:30) a {data.strftime('%d/%m')} (08:30)\n\n"
     
-    # --- VISUALIZAÇÃO ---
-    st.success("Busca finalizada!")
-    
-    dt_ontem = data_escolhida - timedelta(days=1)
-    
-    texto_copia = f"CLIPPING DIÁRIO - {data_escolhida.strftime('%d/%m/%Y')}\n"
-    texto_copia += f"Período: {dt_ontem.strftime('%d/%m')} (08:30) a {data_escolhida.strftime('%d/%m')} (08:30)\n\n"
-    
-    def formatar_texto(dados, titulo_bloco):
-        t = ""
-        if dados:
-            t += f"=== {titulo_bloco} ===\n" 
-            for veiculo in sorted(dados.keys()):
-                t += f"{veiculo}\n"
-                for n in dados[veiculo]:
-                    t += f"{n['titulo']}\n"
-                    t += f"{n['link']}\n" 
-                t += "\n" 
-        else:
-            t += f"=== {titulo_bloco} ===\nNenhuma matéria encontrada.\n"
-        t += "\n" 
-        return t
+    def fmt(dados, tit):
+        t = f"=== {tit} ===\n"
+        if not dados: return t + "Nenhuma matéria encontrada.\n\n"
+        for v in sorted(dados.keys()):
+            t += f"{v}\n"
+            for n in dados[v]:
+                t += f"{n['titulo']}\n{n['link']}\n"
+            t += "\n"
+        return t + "\n"
 
-    texto_copia += formatar_texto(dados_sisema, "MATÉRIAS QUE CITAM O SISEMA")
-    texto_copia += "----------------------------------------\n\n"
-    texto_copia += formatar_texto(dados_geral, "MATÉRIAS AMBIENTAIS RELEVANTES")
-
-    st.subheader("📋 Texto para Cópia")
-    st.text_area("Copie aqui:", value=texto_copia, height=500)
+    txt += fmt(d_sisema, "MATÉRIAS QUE CITAM O SISEMA")
+    txt += "----------------------------------------\n\n"
+    txt += fmt(d_geral, "RELEVANTES/CURIOSIDADES AMBIENTAIS")
     
+    st.subheader("📋 Texto Final")
+    st.text_area("Copie aqui:", txt, height=600)
+    
+    # Conferência
     st.markdown("---")
-    st.subheader("🔍 Área de Conferência")
-    
-    def exibir_compacto(dados, titulo_bloco):
-        st.markdown(f"##### {titulo_bloco}")
-        if not dados:
-            st.caption("Nada encontrado.")
-            return
-
-        for veiculo in sorted(dados.keys()):
-            st.markdown(f"**{veiculo}**")
-            for n in dados[veiculo]:
-                st.markdown(f"• [{n['titulo']}]({n['link']})") 
-            st.write("") 
-
     col1, col2 = st.columns(2)
-    with col1:
-        exibir_compacto(dados_sisema, "SISEMA")
-    with col2:
-        exibir_compacto(dados_geral, "RELEVANTES/CURIOSIDADES")
+    
+    def conf(dados, tit):
+        st.markdown(f"##### {tit}")
+        if not dados: st.caption("Vazio"); return
+        for v in sorted(dados.keys()):
+            st.markdown(f"**{v}**")
+            for n in dados[v]: st.markdown(f"• [{n['titulo']}]({n['link']})")
+            
+    with col1: conf(d_sisema, "SISEMA")
+    with col2: conf(d_geral, "GERAL")
