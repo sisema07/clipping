@@ -7,7 +7,7 @@ import re
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Clipping Diário", page_icon="✂️", layout="wide")
 
-st.title("✂️ Clipping Diário - Auditoria Rigorosa")
+st.title("✂️ Clipping Diário")
 st.markdown("Monitoramento 08:30 às 08:30")
 
 # --- LISTAS DE AUDITORIA (PENTE FINO) ---
