@@ -1,13 +1,11 @@
 import streamlit as st
-import requests
-from bs4 import BeautifulSoup
+import feedparser
 from datetime import datetime, timedelta
-from dateutil import parser
 import re
 
-# ===============================
-# CONFIGURAÇÕES GERAIS
-# ===============================
+# =========================
+# CONFIGURAÇÕES
+# =========================
 
 ORGAOS_MG = [
     "SISEMA",
@@ -47,97 +45,94 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0"
 }
 
-# ===============================
-# FUNÇÕES AUXILIARES
-# ===============================
+RSS_FEEDS = {
+    "Portal O Tempo": "https://www.otempo.com.br/rss",
+    "Estado de Minas": "https://www.em.com.br/rss",
+    "G1 Minas": "https://g1.globo.com/rss/g1/mg/"
+}
 
-def noticia_relevante(titulo):
+# =========================
+# FUNÇÕES
+# =========================
+
+def titulo_relevante(titulo):
     titulo = titulo.lower()
-    return not any(palavra in titulo for palavra in PALAVRAS_EXCLUIDAS)
+    return not any(p in titulo for p in PALAVRAS_EXCLUIDAS)
 
 def cita_orgao_mg(texto):
     texto = texto.lower()
-    return any(orgao.lower() in texto for orgao in ORGAOS_MG)
+    return any(o.lower() in texto for o in ORGAOS_MG)
 
-def dentro_do_intervalo(data_noticia, inicio, fim):
-    return inicio <= data_noticia <= fim
+def dentro_janela(data_pub, data_escolhida):
+    inicio = datetime.combine(
+        data_escolhida - timedelta(days=1),
+        datetime.strptime("08:30", "%H:%M").time()
+    )
+    fim = datetime.combine(
+        data_escolhida,
+        datetime.strptime("08:30", "%H:%M").time()
+    )
+    return inicio <= data_pub <= fim
 
-# ===============================
-# BUSCA DE NOTÍCIAS
-# ===============================
+def buscar_noticias(data_escolhida):
+    orgaos = []
+    gerais = []
 
-def buscar_noticias(data_selecionada):
-    inicio = datetime.combine(data_selecionada - timedelta(days=1), datetime.strptime("08:30", "%H:%M").time())
-    fim = datetime.combine(data_selecionada, datetime.strptime("08:30", "%H:%M").time())
+    for veiculo, feed_url in RSS_FEEDS.items():
+        feed = feedparser.parse(feed_url)
 
-    noticias_orgao = []
-    noticias_gerais = []
+        for entry in feed.entries:
+            titulo = entry.title
+            link = entry.link
 
-    for veiculo, url in FONTES.items():
-        try:
-            response = requests.get(url, headers=HEADERS, timeout=10)
-            soup = BeautifulSoup(response.text, "html.parser")
+            if not titulo_relevante(titulo):
+                continue
 
-            links = soup.find_all("a", href=True)
+            resumo = entry.get("summary", "")
+            texto = f"{titulo} {resumo}"
 
-            for link in links:
-                titulo = link.get_text(strip=True)
-                href = link["href"]
+            try:
+                data_pub = datetime(*entry.published_parsed[:6])
+            except:
+                continue
 
-                if not titulo or len(titulo) < 30:
-                    continue
+            if not dentro_janela(data_pub, data_escolhida):
+                continue
 
-                if not noticia_relevante(titulo):
-                    continue
+            noticia = {
+                "veiculo": veiculo,
+                "titulo": titulo,
+                "link": link
+            }
 
-                if not href.startswith("http"):
-                    continue
+            if cita_orgao_mg(texto):
+                orgaos.append(noticia)
+            else:
+                if "meio ambiente" in texto.lower() or "ambiental" in texto.lower():
+                    gerais.append(noticia)
 
-                texto_completo = titulo.lower()
+    return orgaos, gerais
 
-                data_publicacao = datetime.now()  # fallback
-
-                if not dentro_do_intervalo(data_publicacao, inicio, fim):
-                    continue
-
-                noticia = {
-                    "veiculo": veiculo,
-                    "titulo": titulo,
-                    "link": href
-                }
-
-                if cita_orgao_mg(texto_completo):
-                    noticias_orgao.append(noticia)
-                else:
-                    noticias_gerais.append(noticia)
-
-        except Exception as e:
-            st.warning(f"Erro ao buscar em {veiculo}: {e}")
-
-    return noticias_orgao, noticias_gerais
-
-# ===============================
+# =========================
 # INTERFACE STREAMLIT
-# ===============================
+# =========================
 
-st.set_page_config(page_title="Clipping Ambiental MG", layout="wide")
-
-st.title("🌱 Clipping Ambiental – Minas Gerais")
-
-st.markdown(
-    """
-    Buscador de matérias ambientais com foco em **Minas Gerais**  
-    Período considerado: **08:30 do dia anterior até 08:30 do dia selecionado**
-    """
+st.set_page_config(
+    page_title="Clipping Ambiental MG",
+    page_icon="🌱",
+    layout="wide"
 )
 
-data_escolhida = st.date_input("📅 Selecione a data das publicações")
+st.title("🌱 Clipping Ambiental – Minas Gerais")
+st.caption("Janela de coleta: 08:30 do dia anterior até 08:30 do dia selecionado")
 
-if st.button("🔎 Buscar notícias"):
-    with st.spinner("Buscando matérias ambientais relevantes..."):
+data_escolhida = st.date_input("📅 Selecione a data")
+
+if st.button("🔎 Buscar matérias"):
+    with st.spinner("Coletando notícias ambientais..."):
         orgaos, gerais = buscar_noticias(data_escolhida)
 
-    st.subheader("🏛️ Matérias que citam órgãos ambientais de Minas Gerais")
+    st.subheader("🏛️ Matérias com citação a órgãos ambientais de MG")
 
     if orgaos:
         for n in orgaos:
@@ -146,7 +141,7 @@ if st.button("🔎 Buscar notícias"):
             st.markdown(n["link"])
             st.markdown("---")
     else:
-        st.info("Nenhuma matéria com citação direta a órgãos ambientais encontrada.")
+        st.info("Nenhuma matéria com citação direta a órgãos ambientais de MG.")
 
     st.subheader("🌍 Outras matérias ambientais relevantes")
 
