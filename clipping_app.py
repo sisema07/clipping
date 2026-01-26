@@ -1,156 +1,182 @@
 import streamlit as st
 import feedparser
-from datetime import datetime, timedelta
-import re
+import requests
+from datetime import datetime, timedelta, timezone, time as dt_time
 
-# =========================
-# CONFIGURAÇÕES
-# =========================
+# --- CONFIGURAÇÃO ---
+st.set_page_config(page_title="Clipping Alerts", page_icon="🔗", layout="wide")
+st.title("🔗 Formatador de Google Alerts")
+st.markdown("Transforma seus RSS do Google Alerts em uma lista única e limpa (08:30 às 08:30).")
 
-ORGAOS_MG = [
-    "SISEMA",
-    "Sistema Estadual de Meio Ambiente e Recursos Hídricos",
-    "SEMAD MG",
-    "Secretaria de Estado de Meio Ambiente e Desenvolvimento Sustentável de Minas Gerais",
-    "FEAM",
-    "Fundação Estadual do Meio Ambiente",
-    "IEF",
-    "Instituto Estadual de Florestas",
-    "IGAM",
-    "Instituto Mineiro de Gestão das Águas",
-    "Secretaria de Meio Ambiente de Minas Gerais"
+# ==============================================================================
+# ÁREA DE CONFIGURAÇÃO DOS LINKS (COLE SEUS LINKS DO GOOGLE ALERTS AQUI)
+# ==============================================================================
+
+# Lista 1: Links dos Alertas do SISEMA (Semad, IEF, Feam, Igam...)
+# Cole cada link RSS entre aspas, separado por vírgula.
+URLS_ALERTS_SISEMA = [
+    "https://www.google.com.br/alerts/feeds/06474796398566785113/8556040124559167503",
+    "https://www.google.com.br/alerts/feeds/06474796398566785113/3256954388664724591",
+    "https://www.google.com.br/alerts/feeds/06474796398566785113/8177748629976302199",
+    "https://www.google.com.br/alerts/feeds/06474796398566785113/779453071302735537"
 ]
 
-PALAVRAS_EXCLUIDAS = [
-    "concurso",
-    "previsão do tempo",
-    "temperatura",
-    "clima hoje",
-    "meteorologia"
+# Lista 2: Links dos Alertas GERAIS (Relevantes, Curiosidades...)
+URLS_ALERTS_GERAL = [
+    "https://www.google.com.br/alerts/feeds/06474796398566785113/13915059247713257237"
 ]
 
-FONTES = {
-    "Portal O Tempo": "https://www.otempo.com.br/busca?q=meio%20ambiente",
-    "Portal G1": "https://g1.globo.com/meio-ambiente/",
-    "Portal Estado de Minas": "https://www.em.com.br/busca/meio%20ambiente/",
-    "Portal Hoje Em Dia": "https://www.hojeemdia.com.br/?term=meio+ambiente",
-    "Portal O Eco": "https://oeco.org.br/category/noticias/",
-    "Portal Agência Brasil": "https://agenciabrasil.ebc.com.br/meio-ambiente",
-    "Portal Conexão Planeta": "https://conexaoplaneta.com.br/?s=meio+ambiente",
-    "Portal Sou Ecológico": "https://www.souecologico.com.br/sou-ecologico/meio-ambiente/",
-    "Portal BHAZ": "https://bhaz.com.br/?s=meio+ambiente"
-}
+# ==============================================================================
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0"
-}
+def resolver_link_final(url_google):
+    """Transforma o link redirecionado do Google no link real do site"""
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        # O Google Alerts usa links do tipo google.com/url?q=...
+        # Precisamos extrair o 'q' ou seguir o redirect.
+        if "url?q=" in url_google:
+            # Tentativa rápida de extração via texto (mais rápido que requisição)
+            inicio = url_google.find("url?q=") + 6
+            fim = url_google.find("&ct=")
+            if fim != -1:
+                return url_google[inicio:fim]
+        
+        # Se não der certo extrair, faz a requisição
+        r = requests.head(url_google, allow_redirects=True, timeout=5, headers=headers)
+        if r.status_code == 200: return r.url
+        r = requests.get(url_google, allow_redirects=True, timeout=5, headers=headers)
+        return r.url
+    except:
+        return url_google
 
-GOOGLE_NEWS_QUERIES = {
-    "Órgãos Ambientais MG":
-        "https://news.google.com/rss/search?q=meio+ambiente+Minas+Gerais+SEMAD+OR+FEAM+OR+IEF+OR+IGAM&hl=pt-BR&gl=BR&ceid=BR:pt-419",
+def limpar_nome_veiculo(nome_cru, titulo_materia):
+    # Tenta pegar do título (Padrão: Título - Veículo)
+    if " - " in titulo_materia:
+        possivel_nome = titulo_materia.rsplit(" - ", 1)[1].strip()
+        if len(possivel_nome) < 40: nome_cru = possivel_nome
 
-    "Meio Ambiente MG":
-        "https://news.google.com/rss/search?q=meio+ambiente+Minas+Gerais&hl=pt-BR&gl=BR&ceid=BR:pt-419"
-}
+    nome = nome_cru.replace("www.", "").replace(".com.br", "").replace(".com", "").replace(".gov", "")
+    nome = nome.replace("-", " ").replace("_", " ")
+    
+    mapa = {
+        "gazetadevarginha": "Gazeta de Varginha", "diariodoaco": "Diário do Aço",
+        "em": "Estado de Minas", "otempo": "O Tempo", "hojeemdia": "Hoje em Dia",
+        "folha": "Folha de S.Paulo", "agenciaminas": "Agência Minas",
+        "g1": "Portal G1", "uol": "Portal UOL", "r7": "Portal R7", "youtube": "YouTube",
+        "oeco": "O Eco", "conexaoplaneta": "Conexão Planeta"
+    }
+    
+    nome_lower = nome.lower()
+    for k, v in mapa.items():
+        if k in nome_lower: return v
+    return nome.title()
 
+def converter_para_brt(struct_time_utc):
+    dt_utc = datetime(*struct_time_utc[:6], tzinfo=timezone.utc)
+    return (dt_utc - timedelta(hours=3)).replace(tzinfo=None)
 
-# =========================
-# FUNÇÕES
-# =========================
-
-def titulo_relevante(titulo):
-    titulo = titulo.lower()
-    return not any(p in titulo for p in PALAVRAS_EXCLUIDAS)
-
-def cita_orgao_mg(texto):
-    texto = texto.lower()
-    return any(o.lower() in texto for o in ORGAOS_MG)
-
-def dentro_janela(data_pub, data_escolhida):
-    inicio = datetime.combine(
-        data_escolhida - timedelta(days=1),
-        datetime.strptime("08:30", "%H:%M").time()
-    )
-    fim = datetime.combine(
-        data_escolhida,
-        datetime.strptime("08:30", "%H:%M").time()
-    )
-    return inicio <= data_pub <= fim
-
-def buscar_noticias(data_escolhida):
-    orgaos = []
-    gerais = []
-
-    for categoria, feed_url in GOOGLE_NEWS_QUERIES.items():
-        feed = feedparser.parse(feed_url)
-
+def processar_feeds(lista_urls, data_referencia):
+    # Define a janela 08:30 (Ontem) até 08:30 (Hoje)
+    fim_janela = datetime.combine(data_referencia, dt_time(8, 30))
+    inicio_janela = fim_janela - timedelta(days=1)
+    
+    resultados = {}
+    links_vistos = set()
+    
+    progresso_total = len(lista_urls)
+    barra = st.progress(0)
+    msg = st.empty()
+    
+    for i, url in enumerate(lista_urls):
+        if "COLE_O_LINK" in url: continue # Pula placeholders vazios
+        
+        msg.text(f"Lendo Alerta {i+1}...")
+        barra.progress((i)/progresso_total)
+        
+        feed = feedparser.parse(url)
+        
         for entry in feed.entries:
+            # 1. Filtro de Horário
+            if hasattr(entry, 'published_parsed'):
+                try:
+                    pub_dt = converter_para_brt(entry.published_parsed)
+                    if not (inicio_janela <= pub_dt <= fim_janela):
+                        continue
+                except: continue
+            
+            # 2. Dados
             titulo = entry.title
-            link = entry.link
-            resumo = entry.get("summary", "")
-            texto = f"{titulo} {resumo}"
+            
+            # Limpeza HTML que às vezes vem no título do Alerts
+            titulo = titulo.replace("<b>", "").replace("</b>", "").replace("&quot;", '"')
+            
+            # Limpeza Veículo
+            if " - " in titulo: 
+                titulo_limpo = titulo.rsplit(" - ", 1)[0]
+            else: 
+                titulo_limpo = titulo
+            
+            # Deduplicação
+            chave = titulo_limpo.lower()
+            if chave not in links_vistos:
+                links_vistos.add(chave)
+                
+                v_raw = entry.source.title if 'source' in entry else "Fonte Desconhecida"
+                veiculo = limpar_nome_veiculo(v_raw, entry.title)
+                link_real = resolver_link_final(entry.link)
+                
+                if veiculo not in resultados: resultados[veiculo] = []
+                resultados[veiculo].append({'titulo': titulo_limpo, 'link': link_real})
+    
+    barra.empty()
+    msg.empty()
+    return resultados
 
-            if not titulo_relevante(titulo):
-                continue
+# --- INTERFACE ---
 
-            try:
-                data_pub = datetime(*entry.published_parsed[:6])
-            except:
-                continue
+st.info("Este sistema processa os links RSS do seu Google Alerts, filtra pelo horário (08:30 a 08:30) e formata a lista.")
+data = st.date_input("Data de Referência:", format="DD/MM/YYYY")
 
-            if not dentro_janela(data_pub, data_escolhida):
-                continue
-
-            noticia = {
-                "veiculo": entry.source.title if "source" in entry else "Google News",
-                "titulo": titulo,
-                "link": link
-            }
-
-            if categoria == "Órgãos Ambientais MG":
-                orgaos.append(noticia)
-            else:
-                gerais.append(noticia)
-
-    return orgaos, gerais
-
-# =========================
-# INTERFACE STREAMLIT
-# =========================
-
-st.set_page_config(
-    page_title="Clipping Ambiental MG",
-    page_icon="🌱",
-    layout="wide"
-)
-
-st.title("🌱 Clipping Ambiental – Minas Gerais")
-st.caption("Janela de coleta: 08:30 do dia anterior até 08:30 do dia selecionado")
-
-data_escolhida = st.date_input("📅 Selecione a data")
-
-if st.button("🔎 Buscar matérias"):
-    with st.spinner("Coletando notícias ambientais..."):
-        orgaos, gerais = buscar_noticias(data_escolhida)
-
-    st.subheader("🏛️ Matérias com citação a órgãos ambientais de MG")
-
-    if orgaos:
-        for n in orgaos:
-            st.markdown(f"**{n['veiculo']}**")
-            st.markdown(n["titulo"])
-            st.markdown(n["link"])
-            st.markdown("---")
+if st.button("🚀 Processar Alertas", type="primary"):
+    
+    # Validação simples
+    if "COLE_O_LINK" in URLS_ALERTS_SISEMA[0]:
+        st.error("⚠️ Você precisa colar os links RSS do Google Alerts no código (arquivo .py) antes de rodar!")
     else:
-        st.info("Nenhuma matéria com citação direta a órgãos ambientais de MG.")
+        d_sisema = processar_feeds(URLS_ALERTS_SISEMA, data)
+        d_geral = processar_feeds(URLS_ALERTS_GERAL, data)
+        
+        # --- MONTAGEM DO TEXTO ---
+        ontem = data - timedelta(days=1)
+        txt = f"CLIPPING DIÁRIO - {data.strftime('%d/%m/%Y')}\n"
+        txt += f"Janela: {ontem.strftime('%d/%m')} (08:30) a {data.strftime('%d/%m')} (08:30)\n\n"
+        
+        def fmt(dados, tit):
+            t = f"=== {tit} ===\n"
+            if not dados: return t + "Nenhuma matéria encontrada neste período.\n\n"
+            for v in sorted(dados.keys()):
+                t += f"{v}\n"
+                for n in dados[v]:
+                    t += f"{n['titulo']}\n{n['link']}\n"
+                t += "\n"
+            return t + "\n"
 
-    st.subheader("🌍 Outras matérias ambientais relevantes")
-
-    if gerais:
-        for n in gerais:
-            st.markdown(f"**{n['veiculo']}**")
-            st.markdown(n["titulo"])
-            st.markdown(n["link"])
-            st.markdown("---")
-    else:
-        st.info("Nenhuma outra matéria ambiental relevante encontrada.")
+        txt += fmt(d_sisema, "MATÉRIAS QUE CITAM O SISEMA")
+        txt += "----------------------------------------\n\n"
+        txt += fmt(d_geral, "MATÉRIAS AMBIENTAIS RELEVANTES")
+        
+        st.success("Lista Gerada com a precisão do Google Alerts!")
+        st.text_area("Copie aqui:", txt, height=600)
+        
+        # Área de conferência
+        st.markdown("---")
+        c1, c2 = st.columns(2)
+        def conf(dados, tit):
+            st.markdown(f"##### {tit}")
+            if not dados: st.caption("Vazio")
+            for v in sorted(dados.keys()):
+                st.markdown(f"**{v}**")
+                for n in dados[v]: st.markdown(f"• [{n['titulo']}]({n['link']})")
+        
+        with c1: conf(d_sisema, "SISEMA")
+        with c2: conf(d_geral, "GERAL")
