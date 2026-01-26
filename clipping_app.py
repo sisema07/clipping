@@ -45,11 +45,14 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0"
 }
 
-RSS_FEEDS = {
-    "Portal O Tempo": "https://www.otempo.com.br/rss",
-    "Estado de Minas": "https://www.em.com.br/rss",
-    "G1 Minas": "https://g1.globo.com/rss/g1/mg/"
+GOOGLE_NEWS_QUERIES = {
+    "Órgãos Ambientais MG":
+        "https://news.google.com/rss/search?q=meio+ambiente+Minas+Gerais+SEMAD+OR+FEAM+OR+IEF+OR+IGAM&hl=pt-BR&gl=BR&ceid=BR:pt-419",
+
+    "Meio Ambiente MG":
+        "https://news.google.com/rss/search?q=meio+ambiente+Minas+Gerais&hl=pt-BR&gl=BR&ceid=BR:pt-419"
 }
+
 
 # =========================
 # FUNÇÕES
@@ -78,18 +81,17 @@ def buscar_noticias(data_escolhida):
     orgaos = []
     gerais = []
 
-    for veiculo, feed_url in RSS_FEEDS.items():
+    for categoria, feed_url in GOOGLE_NEWS_QUERIES.items():
         feed = feedparser.parse(feed_url)
 
         for entry in feed.entries:
             titulo = entry.title
             link = entry.link
+            resumo = entry.get("summary", "")
+            texto = f"{titulo} {resumo}"
 
             if not titulo_relevante(titulo):
                 continue
-
-            resumo = entry.get("summary", "")
-            texto = f"{titulo} {resumo}"
 
             try:
                 data_pub = datetime(*entry.published_parsed[:6])
@@ -100,16 +102,15 @@ def buscar_noticias(data_escolhida):
                 continue
 
             noticia = {
-                "veiculo": veiculo,
+                "veiculo": entry.source.title if "source" in entry else "Google News",
                 "titulo": titulo,
                 "link": link
             }
 
-            if cita_orgao_mg(texto):
+            if categoria == "Órgãos Ambientais MG":
                 orgaos.append(noticia)
             else:
-                if "meio ambiente" in texto.lower() or "ambiental" in texto.lower():
-                    gerais.append(noticia)
+                gerais.append(noticia)
 
     return orgaos, gerais
 
