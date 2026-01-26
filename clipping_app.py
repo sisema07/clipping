@@ -34,9 +34,9 @@ FONTES = {
     "Portal G1": "https://g1.globo.com/meio-ambiente/",
     "Portal Estado de Minas": "https://www.em.com.br/busca/meio%20ambiente/",
     "Portal Hoje Em Dia": "https://www.hojeemdia.com.br/?term=meio+ambiente",
-    "Portal O Eco": "https://oeco.org.br/category/noticias/,
+    "Portal O Eco": "https://oeco.org.br/category/noticias/",
     "Portal Agência Brasil": "https://agenciabrasil.ebc.com.br/meio-ambiente",
-    "Portal Conexão Planeta": "https://conexaoplaneta.com.br/?s=meio+ambiente,
+    "Portal Conexão Planeta": "https://conexaoplaneta.com.br/?s=meio+ambiente",
     "Portal Sou Ecológico": "https://www.souecologico.com.br/sou-ecologico/meio-ambiente/",
     "Portal BHAZ": "https://bhaz.com.br/?s=meio+ambiente"
 }
